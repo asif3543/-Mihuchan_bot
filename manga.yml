@@ -1,0 +1,102 @@
+name: Manga Translation Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_id: { required: true }
+      chat_id: { required: true }
+      msg_id: { required: true }
+      user_id: { required: true }
+      lang: { required: true }
+      style: { required: true }
+      fname: { required: true }
+      mode: { required: true }  # extract or render mode
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest  # Standard free GitHub runner
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # CACHE FIX:
+      # Pehle "key" me ${{ github.run_id }} tha, jo HAR run me unique hota
+      # hai -> cache-hit kabhi bhi "true" nahi hoti thi, isliye har baar
+      # poora venv + repo + models fresh download/build hote the (super slow).
+      # Ab key stable hai, aur agli step me hum directory-existence check
+      # bhi karte hain (sirf cache-hit output par depend nahi karte),
+      # taaki partial restore-key match bhi sahi se detect ho.
+      # ------------------------------------------------------------------
+      - name: Cache Translator Workspace
+        id: workspace-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            venv
+            manga-image-translator
+            ~/.cache/huggingface
+          key: ${{ runner.os }}-manga-workspace-v2
+          restore-keys: |
+            ${{ runner.os }}-manga-workspace-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0 build-essential libeigen3-dev zip
+
+      - name: Setup Translator
+        run: |
+          # venv folder cache se aa chuka ho to python -m venv usko touch nahi karega
+          if [ ! -d "venv" ]; then
+            python -m venv venv
+          fi
+          source venv/bin/activate
+
+          # Cache-hit output ke bajaye actual files check karte hain — zyada
+          # reliable hai (restore-keys partial match par bhi cache-hit=false
+          # aata hai, lekin files already restored ho chuki hoti hain).
+          if [ -d "manga-image-translator" ] && [ -x "venv/bin/python" ] && venv/bin/python -c "import torch" 2>/dev/null; then
+            echo "✅ Cache hit! Virtual environment and models restored — skipping full install."
+          else
+            echo "⚠️ Cache miss! Installing dependencies from scratch..."
+            if [ ! -d "manga-image-translator" ]; then
+              git clone https://github.com/zyddnys/manga-image-translator.git
+              cd manga-image-translator
+              git checkout $(git rev-list -n 1 --before="2024-03-01" HEAD)
+              cd ..
+            fi
+
+            sed -i '/pydensecrf/d' manga-image-translator/requirements.txt || true
+
+            pip install --no-cache-dir --upgrade pip
+            pip install --no-cache-dir Cython numpy setuptools wheel
+            pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+            pip install --no-cache-dir git+https://github.com/kodalli/pydensecrf.git
+            pip install -r manga-image-translator/requirements.txt
+            pip install pyrogram tgcrypto Pillow anyascii pymupdf requests psutil
+          fi
+
+      - name: Run Worker
+        env:
+          FILE_ID: ${{ github.event.inputs.file_id }}
+          CHAT_ID: ${{ github.event.inputs.chat_id }}
+          MSG_ID: ${{ github.event.inputs.msg_id }}
+          USER_ID: ${{ github.event.inputs.user_id }}
+          LANG: ${{ github.event.inputs.lang }}
+          STYLE: ${{ github.event.inputs.style }}
+          FNAME: ${{ github.event.inputs.fname }}
+          MODE: ${{ github.event.inputs.mode }}
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          REPO_NAME: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          source venv/bin/activate
+          python worker.py
