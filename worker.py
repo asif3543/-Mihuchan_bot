@@ -42,13 +42,6 @@ except ImportError:
     pass
 
 # ============================================================================
-# FIX #1 (bubble mismatch / missing dialogues):
-# Page numbering ab ek fragile "global counter that increments once per
-# translate() call" par depend NAHI karta. Ab har page ka number worker.py
-# se explicit env var (ENV_CURRENT_PAGE_IDX) ke through pass hota hai, aur
-# har page ek ALAG subprocess me akele process hota hai. Isse ek page ke
-# skip/extra-call hone se baaki saare pages ka index kabhi shift nahi hota.
-# ============================================================================
 ROUTINE_SCRIPT_BYPASSER = r"""
 import os
 import json
@@ -86,8 +79,6 @@ class HumanInterventionTranslator(CommonTranslator):
             return queries
 
         mode = os.environ.get("ENV_TRANSLATE_MODE", "EXTRACT")
-        # Page number ab worker.py se fixed env var se aata hai (per-subprocess),
-        # koi global/process-level counter drift nahi hoga.
         current_page = int(os.environ.get("ENV_CURRENT_PAGE_IDX", "1"))
 
         if mode == "EXTRACT":
@@ -142,11 +133,6 @@ async def run_translator_with_fallback(input_dir, output_dir, ws, bot_client, mo
             with open(core_lib_node, "w", encoding="utf-8") as injectn:
                 injectn.write(ROUTINE_SCRIPT_BYPASSER)
 
-    # ------------------------------------------------------------------
-    # FIX #2 (chote bubble chhoot jaate hain):
-    # text-threshold/box-threshold ko relax kiya + unclip-ratio badhaya
-    # taaki chote/faint bubbles bhi detect + capture ho.
-    # ------------------------------------------------------------------
     style_flags = [
         "--manga2eng",
         "--mask-dilation-offset", "5",
@@ -166,7 +152,7 @@ async def run_translator_with_fallback(input_dir, output_dir, ws, bot_client, mo
     start_time = time.time()
 
     # ------------------------------------------------------------------
-    # PHASE 1: EXTRACTION (MODE: EXTRACT) — one subprocess PER PAGE
+    # PHASE 1: EXTRACTION
     # ------------------------------------------------------------------
     if mode == "extract":
         os.environ["ENV_TRANSLATE_MODE"] = "EXTRACT"
@@ -201,14 +187,16 @@ async def run_translator_with_fallback(input_dir, output_dir, ws, bot_client, mo
             except Exception:
                 pass
 
-        # Compile master file with metadata header at the very top
+        # Compile master file with metadata header
         master_lines = []
+        # ✅ मेटाडेटा में user_id जोड़ा गया
         metadata = {
             "file_id": FILE_ID,
             "chat_id": CHAT_ID,
             "lang": LANG,
             "style": STYLE,
-            "fname": FNAME
+            "fname": FNAME,
+            "user_id": USER_ID
         }
         metadata_json = json.dumps(metadata)
         metadata_b64 = base64.b64encode(metadata_json.encode('utf-8')).decode('utf-8')
@@ -227,10 +215,6 @@ async def run_translator_with_fallback(input_dir, output_dir, ws, bot_client, mo
                     master_lines.append(f"{idx}")
                     master_lines.append(f"{{{USER_ID}}}tutty_{i}_{idx} ==> {q}\n")
                 master_lines.append("")
-            # Note: agar kisi page par bilkul bhi text/bubble detect nahi hua,
-            # to us page ke liye query-file bana hi nahi — us page ko
-            # (sahi tarah se) skip kar dete hain. Numbering "i" ab hamesha
-            # us page ki ASLI position ke barabar hai (fragile counter nahi).
 
         master_txt_path = os.path.join(ws, f"FrameExtr_{USER_ID}.txt")
         with open(master_txt_path, "w", encoding="utf-8") as wf:
@@ -261,7 +245,7 @@ async def run_translator_with_fallback(input_dir, output_dir, ws, bot_client, mo
         return True, "ExtractSuccess", ""
 
     # ------------------------------------------------------------------
-    # PHASE 2: RENDERING (MODE: RENDER) — one subprocess PER PAGE
+    # PHASE 2: RENDERING
     # ------------------------------------------------------------------
     elif mode == "render":
         os.environ["ENV_TRANSLATE_MODE"] = "RENDER"
@@ -393,9 +377,7 @@ async def main():
         return await tg_bot.stop()
 
     # ------------------------------------------------------------------
-    # SPEED FIX: bade scan pages ko downscale karo (max width ~1600px)
-    # CPU-only GitHub runner par bade resolution images processing ka
-    # sabse bada slow-down cause hain.
+    # SPEED FIX: bade scan pages ko downscale karo
     # ------------------------------------------------------------------
     try:
         from PIL import Image
@@ -462,31 +444,12 @@ async def main():
         if not finals_l:
             raise ValueError("Rendering phase compiled but no output images found.")
 
-        zipx_out = "translated_" + FNAME if ext in [".zip", ".cbz", ".pdf"] else finals_l[0]
-
-        if ext in [".zip", ".cbz"]:
-            with zipfile.ZipFile(zipx_out, 'w', zipfile.ZIP_DEFLATED) as z_enc:
-                for fd_c in finals_l:
-                    z_enc.write(fd_c, os.path.relpath(fd_c, out))
-        elif ext == ".pdf":
-            import fitz
-            from PIL import Image
-            doc = fitz.open()
-            for img_path in finals_l:
-                with Image.open(img_path) as pil_img:
-                    width, height = pil_img.size
-                    temp_jpg = img_path + ".jpg"
-                    pil_img.convert("RGB").save(temp_jpg, "JPEG", quality=50, optimize=True)
-
-                page = doc.new_page(width=width, height=height)
-                page.insert_image(page.rect, filename=temp_jpg, keep_proportion=True)
-                try:
-                    os.remove(temp_jpg)
-                except Exception:
-                    pass
-
-            doc.save(zipx_out, garbage=4, deflate=True)
-            doc.close()
+        # ✅ हमेशा ZIP बनाएँ, इमेज के नाम 01.png, 02.png...
+        zipx_out = f"translated_{os.path.splitext(FNAME)[0]}.zip"
+        with zipfile.ZipFile(zipx_out, 'w', zipfile.ZIP_DEFLATED) as z:
+            for idx, img_path in enumerate(finals_l, 1):
+                new_name = f"{idx:02d}{os.path.splitext(img_path)[1]}"
+                z.write(img_path, new_name)
 
         endcap_caption = "✅ **Processing Repacked Successfully!**\n⚡ Control Type: Manual Human Output Render Logic MTPE"
 
@@ -503,8 +466,7 @@ async def main():
     except Exception:
         pass
     try:
-        if ext in [".zip", ".cbz", ".pdf"]:
-            os.remove(zipx_out)
+        os.remove(zipx_out)
     except Exception:
         pass
     await tg_bot.stop()
