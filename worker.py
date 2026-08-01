@@ -189,14 +189,14 @@ async def run_translator_with_fallback(input_dir, output_dir, ws, bot_client, mo
 
         # Compile master file with metadata header
         master_lines = []
-        # ✅ मेटाडेटा में user_id जोड़ा गया
+        # ✅ FIX: user_id को स्ट्रिंग में बदला
         metadata = {
             "file_id": FILE_ID,
             "chat_id": CHAT_ID,
             "lang": LANG,
             "style": STYLE,
             "fname": FNAME,
-            "user_id": USER_ID
+            "user_id": str(USER_ID)     # ← अब यह स्ट्रिंग है
         }
         metadata_json = json.dumps(metadata)
         metadata_b64 = base64.b64encode(metadata_json.encode('utf-8')).decode('utf-8')
