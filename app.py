@@ -10,7 +10,6 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# Safe Pyrogram Bypass Hack
 pyrogram.utils.get_peer_type = lambda p: "channel" if str(p).startswith("-100") else "chat" if str(p).startswith("-") else "user"
 
 API_ID_ENV = os.getenv("API_ID", "").strip()
@@ -28,7 +27,6 @@ SAFE_CHANNEL_ID = -1003962165512
 
 app = Client("MangaFrontend", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=16)
 
-# Global tracker for workflow dispatch styling selection stage
 pending_tasks = {}
 
 def is_authorized(m: Message):
@@ -74,7 +72,6 @@ async def process_user_txt(c, m: Message):
         if os.path.exists(dl_pointer): os.remove(dl_pointer)
         return await diag.edit(f"❌ **Failed to read file:** `{e}`")
 
-    # Search the first 5 lines of the received file to find and extract the metadata config tag
     lines = c_layer.splitlines()
     task = None
     for line in lines[:5]:
@@ -90,7 +87,12 @@ async def process_user_txt(c, m: Message):
 
     if not task:
         if os.path.exists(dl_pointer): os.remove(dl_pointer)
-        return await diag.edit("⚠️ **Metadata Error:** System configuration tag `#METADATA` at the top of the file is missing or corrupted! Please upload the original file without removing the metadata line.")
+        return await diag.edit("⚠️ **Metadata Error:** System configuration tag `#METADATA` missing or corrupted!")
+
+    # ✅ सही यूज़र की फ़ाइल है या नहीं, दोहरी जाँच
+    if task.get("user_id") != str(m.from_user.id):
+        if os.path.exists(dl_pointer): os.remove(dl_pointer)
+        return await diag.edit("❌ **Unauthorized:** This translation file belongs to another user.")
 
     u_id = m.from_user.id
     u_base_id = str(u_id)
@@ -98,7 +100,6 @@ async def process_user_txt(c, m: Message):
         if os.path.exists(dl_pointer): os.remove(dl_pointer)
         return await diag.edit("⚠️ **Integrity Error:** Tag structure not found. Keep the tag unharmed!")
 
-    # Write translated file content directly to GitHub Repo
     github_filename = f"trans_{u_base_id}.txt"
     url = f"https://api.github.com/repos/{REPO_NAME}/contents/{github_filename}"
     headers = {
@@ -119,7 +120,6 @@ async def process_user_txt(c, m: Message):
 
         res = requests.put(url, headers=headers, json=payload, timeout=10)
         if res.status_code in [200, 201]:
-            # Step 2/2 progress bar initiated in group/chat where /english was run
             render_msg = await c.send_message(
                 chat_id=task["chat_id"],
                 text=(
@@ -129,7 +129,6 @@ async def process_user_txt(c, m: Message):
                 )
             )
 
-            # Dispatch workflow with mode: render
             url_dispatch = f"https://api.github.com/repos/{REPO_NAME}/actions/workflows/manga.yml/dispatches"
             render_payload = {
                 "ref": "main",
@@ -249,7 +248,7 @@ async def invoke_dispatch(c, q: CallbackQuery):
             "lang": t["lang"],
             "style": style,
             "fname": t["fname"],
-            "mode": "extract"  # Triggering Stage 1
+            "mode": "extract"
         }
     }
 
@@ -273,12 +272,43 @@ async def invoke_dispatch(c, q: CallbackQuery):
     del pending_tasks[t_id]
 
 
+# ==============================
+# ✅ नए कमांड्स
+# ==============================
+@app.on_message(filters.command("status"))
+async def status_cmd(c, m: Message):
+    if not is_authorized(m):
+        return
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+    url = f"https://api.github.com/repos/{REPO_NAME}/actions/runs?status=in_progress&event=workflow_dispatch"
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        data = r.json()
+        total = data.get("total_count", 0)
+        if total > 0:
+            await m.reply(f"⚙️ **Active Task:** {total} (GitHub Actions is running, new task will queue.)")
+        else:
+            await m.reply("✅ **No active task.** You can start a new one.")
+    except Exception as e:
+        await m.reply("❌ Could not connect to GitHub.")
+
+
+@app.on_message(filters.command("cancel"))
+async def cancel_cmd(c, m: Message):
+    if not is_authorized(m):
+        return
+    cancelled = False
+    for task_id, task in list(pending_tasks.items()):
+        if task["uid"] == m.from_user.id:
+            del pending_tasks[task_id]
+            cancelled = True
+    if cancelled:
+        await m.reply("❌ Your pending style selection has been cancelled.")
+    else:
+        await m.reply("No pending style selection found for you.")
+
+
 def run_http_server():
-    # ------------------------------------------------------------------
-    # RENDER FIX: Render dynamically assigns the port via the $PORT
-    # env var. Hardcoded 7860 se Render "no open port detected" bol kar
-    # deploy fail kar dega. 7860 sirf local/HF fallback ke liye rakha hai.
-    # ------------------------------------------------------------------
     port = int(os.getenv("PORT", "7860"))
 
     class SimpleHandler(BaseHTTPRequestHandler):
