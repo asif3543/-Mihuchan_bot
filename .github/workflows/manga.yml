@@ -14,20 +14,18 @@ on:
 
 jobs:
   translate:
-    runs-on: ubuntu-latest  # Standard free GitHub runner
+    # ------------------------------------------------
+    # 🔁 एक बार में सिर्फ़ एक रन, बाकी कतार में लगेंगे
+    # ------------------------------------------------
+    concurrency:
+      group: manga-translate
+      cancel-in-progress: false
+
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------------
-      # CACHE FIX:
-      # Pehle "key" me ${{ github.run_id }} tha, jo HAR run me unique hota
-      # hai -> cache-hit kabhi bhi "true" nahi hoti thi, isliye har baar
-      # poora venv + repo + models fresh download/build hote the (super slow).
-      # Ab key stable hai, aur agli step me hum directory-existence check
-      # bhi karte hain (sirf cache-hit output par depend nahi karte),
-      # taaki partial restore-key match bhi sahi se detect ho.
-      # ------------------------------------------------------------------
       - name: Cache Translator Workspace
         id: workspace-cache
         uses: actions/cache@v4
@@ -52,15 +50,11 @@ jobs:
 
       - name: Setup Translator
         run: |
-          # venv folder cache se aa chuka ho to python -m venv usko touch nahi karega
           if [ ! -d "venv" ]; then
             python -m venv venv
           fi
           source venv/bin/activate
 
-          # Cache-hit output ke bajaye actual files check karte hain — zyada
-          # reliable hai (restore-keys partial match par bhi cache-hit=false
-          # aata hai, lekin files already restored ho chuki hoti hain).
           if [ -d "manga-image-translator" ] && [ -x "venv/bin/python" ] && venv/bin/python -c "import torch" 2>/dev/null; then
             echo "✅ Cache hit! Virtual environment and models restored — skipping full install."
           else
