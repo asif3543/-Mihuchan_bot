@@ -150,14 +150,12 @@ async def run_translator_with_fallback(input_dir, output_dir, ws, bot_client, mo
             with open(core_lib_node, "w", encoding="utf-8") as injectn:
                 injectn.write(ROUTINE_SCRIPT_BYPASSER)
 
-    # ADJUSTED PARAMETERS FOR DOUBLE BUBBLES AND INPAINT CLEANING
+    # STRUCTURE PRESERVED - ONLY NUMERICAL VALUES CHANGED FOR BETTER EXTRACTION
     style_flags = [
         "--manga2eng", 
-        "--mask-dilation-offset", "9",  # Increased from 5 to 9 to completely clean bubble borders/outlines
-        "--text-threshold", "0.30",     # Lowered to capture tiny and double bubble contents
-        "--box-threshold", "0.35",      # Lowered for precise detection of nested segments
-        "--inpainter", "lama",          # Force LaMa to completely eliminate dirty brush remains
-        "--detector", "comic"           # Specifically target comic style text layouts
+        "--mask-dilation-offset", "9",
+        "--text-threshold", "0.30",
+        "--box-threshold", "0.35"
     ]
     
     pages = sorted([os.path.join(r, f) for r, _, fs in os.walk(input_dir) for f in fs if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.bmp'))])
