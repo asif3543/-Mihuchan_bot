@@ -14,14 +14,7 @@ on:
 
 jobs:
   translate:
-    # ------------------------------------------------
-    # 🔁 एक बार में सिर्फ़ एक रन, बाकी कतार में लगेंगे
-    # ------------------------------------------------
-    concurrency:
-      group: manga-translate
-      cancel-in-progress: false
-
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # Standard free GitHub runner
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -34,7 +27,7 @@ jobs:
             venv
             manga-image-translator
             ~/.cache/huggingface
-          key: ${{ runner.os }}-manga-workspace-v2
+          key: ${{ runner.os }}-manga-workspace-v3
           restore-keys: |
             ${{ runner.os }}-manga-workspace-
 
@@ -50,30 +43,29 @@ jobs:
 
       - name: Setup Translator
         run: |
-          if [ ! -d "venv" ]; then
-            python -m venv venv
-          fi
+          python -m venv venv
           source venv/bin/activate
-
-          if [ -d "manga-image-translator" ] && [ -x "venv/bin/python" ] && venv/bin/python -c "import torch" 2>/dev/null; then
-            echo "✅ Cache hit! Virtual environment and models restored — skipping full install."
-          else
-            echo "⚠️ Cache miss! Installing dependencies from scratch..."
+          
+          # Runs full installation if workspace cache is missed
+          if [ "${{ steps.workspace-cache.outputs.cache-hit }}" != "true" ]; then
+            echo "Cache missed! Installing dependencies from scratch..."
             if [ ! -d "manga-image-translator" ]; then
               git clone https://github.com/zyddnys/manga-image-translator.git
               cd manga-image-translator
               git checkout $(git rev-list -n 1 --before="2024-03-01" HEAD)
               cd ..
             fi
-
+            
             sed -i '/pydensecrf/d' manga-image-translator/requirements.txt || true
-
+            
             pip install --no-cache-dir --upgrade pip
             pip install --no-cache-dir Cython numpy setuptools wheel
             pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
             pip install --no-cache-dir git+https://github.com/kodalli/pydensecrf.git
             pip install -r manga-image-translator/requirements.txt
             pip install pyrogram tgcrypto Pillow anyascii pymupdf requests psutil
+          else
+            echo "Cache hit! Virtual environment and models restored instantly."
           fi
 
       - name: Run Worker
