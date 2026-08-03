@@ -10,6 +10,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+# Safe Pyrogram Bypass Hack
 pyrogram.utils.get_peer_type = lambda p: "channel" if str(p).startswith("-100") else "chat" if str(p).startswith("-") else "user"
 
 API_ID_ENV = os.getenv("API_ID", "").strip()
@@ -23,14 +24,15 @@ REPO_NAME = os.getenv("REPO_NAME", "aasifhusenaasifkhan-beep/tamatar-laal-").str
 OWNER_ID = 5344078567
 ALLOWED_USER = 5351848105
 GROUP_ID = -1003899919015
-SAFE_CHANNEL_ID = -1003962165512
+SAFE_CHANNEL_ID = -1003962165512   
 
 app = Client("MangaFrontend", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=16)
 
+# Global tracker for workflow dispatch styling selection stage
 pending_tasks = {}
 
 def is_authorized(m: Message):
-    if not m.from_user:
+    if not m.from_user: 
         return False
     u_id = m.from_user.id
     if m.chat.type == pyrogram.enums.ChatType.PRIVATE:
@@ -39,7 +41,7 @@ def is_authorized(m: Message):
 
 @app.on_message(filters.command("start"))
 async def start_cmd(c, m: Message):
-    if not is_authorized(m):
+    if not is_authorized(m): 
         return
     await m.reply(
         "✅ **Deep Annelise Tracker System Live!**\n\n"
@@ -48,23 +50,39 @@ async def start_cmd(c, m: Message):
         "2️⃣ Reply `/english` or `/hienglish` to it\n"
         "3️⃣ Single merged text file of **ALL pages** will be sent to your **PM**\n"
         "4️⃣ Translate words and upload `.txt` file back within 10 minutes!\n"
-        "5️⃣ Bot will automatically compile and Typeset your manga!"
+        "5️⃣ Bot will automatically compile and Typeset your manga!\n\n"
+        "**Tip:** If you wish to interrupt the current flow, send `/cancel`."
     )
+
+@app.on_message(filters.command("cancel"))
+async def cancel_cmd(c, m: Message):
+    if not is_authorized(m): 
+        return
+    u_id = m.from_user.id
+    
+    # Remove active user sessions from global tracker
+    keys_to_remove = [k for k, v in pending_tasks.items() if v.get("uid") == u_id or v.get("cid") == m.chat.id]
+    if keys_to_remove:
+        for k in keys_to_remove:
+            pending_tasks.pop(k, None)
+        await m.reply("✅ **Active translation task canceled.** You can start a new task now.")
+    else:
+        await m.reply("⚠️ **No active tasks found to cancel.**")
 
 # ====================================================================
 # 📝 1. RECEIVER FOR TRANSLATED USER TXT FILES
 # ====================================================================
 @app.on_message(filters.document)
 async def process_user_txt(c, m: Message):
-    if not m.document or not m.document.file_name.endswith(".txt"):
+    if not m.document or not m.document.file_name.endswith(".txt"): 
         return
 
-    if not is_authorized(m):
+    if not is_authorized(m): 
         return
 
     diag = await m.reply("⏳ **Syncing:** Sending translation to background engine database...")
     dl_pointer = await m.download()
-
+    
     try:
         with open(dl_pointer, "r", encoding="utf-8") as rf:
             c_layer = rf.read()
@@ -72,6 +90,7 @@ async def process_user_txt(c, m: Message):
         if os.path.exists(dl_pointer): os.remove(dl_pointer)
         return await diag.edit(f"❌ **Failed to read file:** `{e}`")
 
+    # Search the first 5 lines of the received file to find and extract the metadata config tag
     lines = c_layer.splitlines()
     task = None
     for line in lines[:5]:
@@ -87,39 +106,36 @@ async def process_user_txt(c, m: Message):
 
     if not task:
         if os.path.exists(dl_pointer): os.remove(dl_pointer)
-        return await diag.edit("⚠️ **Metadata Error:** System configuration tag `#METADATA` missing or corrupted!")
-
-    # ✅ सही यूज़र की फ़ाइल है या नहीं, दोहरी जाँच
-    if task.get("user_id") != str(m.from_user.id):
-        if os.path.exists(dl_pointer): os.remove(dl_pointer)
-        return await diag.edit("❌ **Unauthorized:** This translation file belongs to another user.")
+        return await diag.edit("⚠️ **Metadata Error:** System configuration tag `#METADATA` at the top of the file is missing or corrupted! Please upload the original file without removing the metadata line.")
 
     u_id = m.from_user.id
     u_base_id = str(u_id)
     if f"{{{u_base_id}}}tutty" not in c_layer:
         if os.path.exists(dl_pointer): os.remove(dl_pointer)
         return await diag.edit("⚠️ **Integrity Error:** Tag structure not found. Keep the tag unharmed!")
-
+        
+    # Write translated file content directly to GitHub Repo
     github_filename = f"trans_{u_base_id}.txt"
     url = f"https://api.github.com/repos/{REPO_NAME}/contents/{github_filename}"
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json"
     }
-
+    
     try:
         r = requests.get(url, headers=headers, timeout=10)
         sha = r.json().get("sha") if r.status_code == 200 else None
-
+        
         encoded_content = base64.b64encode(c_layer.encode('utf-8')).decode('utf-8')
         payload = {
             "message": f"Upload translation for user {u_base_id}",
             "content": encoded_content
         }
         if sha: payload["sha"] = sha
-
+            
         res = requests.put(url, headers=headers, json=payload, timeout=10)
         if res.status_code in [200, 201]:
+            # Step 2/2 progress bar initiated in group/chat where /english was run
             render_msg = await c.send_message(
                 chat_id=task["chat_id"],
                 text=(
@@ -128,22 +144,23 @@ async def process_user_txt(c, m: Message):
                     "`[░░░░░░░░░░] 0% — Initiating Pipeline`"
                 )
             )
-
+            
+            # Dispatch workflow with mode: render
             url_dispatch = f"https://api.github.com/repos/{REPO_NAME}/actions/workflows/manga.yml/dispatches"
             render_payload = {
                 "ref": "main",
                 "inputs": {
-                    "file_id": task["file_id"],
-                    "chat_id": str(task["chat_id"]),
-                    "msg_id": str(render_msg.id),
-                    "user_id": str(u_id),
-                    "lang": task["lang"],
-                    "style": task["style"],
+                    "file_id": task["file_id"], 
+                    "chat_id": str(task["chat_id"]), 
+                    "msg_id": str(render_msg.id), 
+                    "user_id": str(u_id), 
+                    "lang": task["lang"], 
+                    "style": task["style"], 
                     "fname": task["fname"],
                     "mode": "render"
                 }
             }
-
+            
             response = requests.post(url_dispatch, headers=headers, json=render_payload, timeout=15)
             if response.status_code in [200, 201, 204]:
                 await diag.edit("✅ **Payload Synced!** Render Engine is now initiating Typesettings. Stand-by...")
@@ -153,7 +170,7 @@ async def process_user_txt(c, m: Message):
             await diag.edit(f"❌ **GitHub Sync Fail:** `{res.status_code}`")
     except Exception as e:
         await diag.edit(f"❌ **Network Error:** `{e}`")
-
+        
     try:
         if os.path.exists(dl_pointer): os.remove(dl_pointer)
     except: pass
@@ -165,14 +182,14 @@ async def process_user_txt(c, m: Message):
 @app.on_message(filters.command(["english", "hienglish"]))
 async def translate_cmd(c, m: Message):
     if not is_authorized(m): return
-
+    
     target_msg = m.reply_to_message if m.reply_to_message else m
     if not target_msg.document and not target_msg.photo:
         return await m.reply("❌ **Error:** Please reply to a valid ZIP, PDF, or Image file.")
-
+    
     lang = "hienglish" if "hienglish" in m.command[0].lower() else "english"
     uid, cid = m.from_user.id, m.chat.id
-
+    
     try:
         await c.send_chat_action(uid, pyrogram.enums.ChatAction.TYPING)
     except Exception:
@@ -182,7 +199,7 @@ async def translate_cmd(c, m: Message):
         )
 
     st = await m.reply("⏳ **Verification:** Transmitting extraction core...")
-
+    
     try:
         copied = await target_msg.copy(SAFE_CHANNEL_ID)
         file_id = copied.document.file_id if copied.document else copied.photo.file_id
@@ -210,12 +227,12 @@ async def translate_cmd(c, m: Message):
 async def invoke_dispatch(c, q: CallbackQuery):
     if not q.data.startswith("s_"): return
     _, style, t_id = q.data.split("_", 2)
-    if t_id not in pending_tasks:
+    if t_id not in pending_tasks: 
         return await q.answer("Task Expired System Frame Error!", show_alert=True)
-
+        
     t = pending_tasks[t_id]
     uid = q.from_user.id
-
+    
     # Clean up old translation files from GitHub
     github_filename = f"trans_{uid}.txt"
     delete_url = f"https://api.github.com/repos/{REPO_NAME}/contents/{github_filename}"
@@ -223,7 +240,7 @@ async def invoke_dispatch(c, q: CallbackQuery):
         "Authorization": f"token {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json"
     }
-
+    
     try:
         r = requests.get(delete_url, headers=headers, timeout=10)
         if r.status_code == 200:
@@ -235,29 +252,29 @@ async def invoke_dispatch(c, q: CallbackQuery):
             requests.delete(delete_url, headers=headers, json=payload, timeout=10)
     except Exception as e:
         print("Failed to delete pre-existing file:", e)
-
+    
     # Trigger Action Workflow for EXTRACT
     url = f"https://api.github.com/repos/{REPO_NAME}/actions/workflows/manga.yml/dispatches"
     payload = {
         "ref": "main",
         "inputs": {
-            "file_id": t["file_id"],
-            "chat_id": str(t["cid"]),
-            "msg_id": str(q.message.id),
-            "user_id": str(uid),
-            "lang": t["lang"],
-            "style": style,
+            "file_id": t["file_id"], 
+            "chat_id": str(t["cid"]), 
+            "msg_id": str(q.message.id), 
+            "user_id": str(uid), 
+            "lang": t["lang"], 
+            "style": style, 
             "fname": t["fname"],
-            "mode": "extract"
+            "mode": "extract"  # Triggering Stage 1
         }
     }
-
+    
     await q.message.edit(
         "🚀 **Stage 1/2: Booting OCR Engine...**\n"
         "GitHub Actions workspace is starting up...\n\n"
         "`[░░░░░░░░░░] 0% — Initiating Pipeline`"
     )
-
+    
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=15)
         if response.status_code not in [200, 201, 204]:
@@ -268,49 +285,11 @@ async def invoke_dispatch(c, q: CallbackQuery):
             )
     except Exception as e:
         await q.message.edit(f"❌ **Trigger Exception:** `{e}`")
-
+        
     del pending_tasks[t_id]
 
 
-# ==============================
-# ✅ नए कमांड्स
-# ==============================
-@app.on_message(filters.command("status"))
-async def status_cmd(c, m: Message):
-    if not is_authorized(m):
-        return
-    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-    url = f"https://api.github.com/repos/{REPO_NAME}/actions/runs?status=in_progress&event=workflow_dispatch"
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        data = r.json()
-        total = data.get("total_count", 0)
-        if total > 0:
-            await m.reply(f"⚙️ **Active Task:** {total} (GitHub Actions is running, new task will queue.)")
-        else:
-            await m.reply("✅ **No active task.** You can start a new one.")
-    except Exception as e:
-        await m.reply("❌ Could not connect to GitHub.")
-
-
-@app.on_message(filters.command("cancel"))
-async def cancel_cmd(c, m: Message):
-    if not is_authorized(m):
-        return
-    cancelled = False
-    for task_id, task in list(pending_tasks.items()):
-        if task["uid"] == m.from_user.id:
-            del pending_tasks[task_id]
-            cancelled = True
-    if cancelled:
-        await m.reply("❌ Your pending style selection has been cancelled.")
-    else:
-        await m.reply("No pending style selection found for you.")
-
-
 def run_http_server():
-    port = int(os.getenv("PORT", "7860"))
-
     class SimpleHandler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
@@ -320,8 +299,7 @@ def run_http_server():
         def log_message(self, format, *args): return
 
     try:
-        server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-        print(f"Dummy HTTP server listening on 0.0.0.0:{port}")
+        server = HTTPServer(("0.0.0.0", 10000), SimpleHandler)
         server.serve_forever()
     except Exception as e:
         print(f"HTTP Server Exception: {e}")
