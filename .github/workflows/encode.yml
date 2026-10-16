@@ -1,0 +1,110 @@
+name: Video Processing Pipeline
+# Public repo: the run name shows only the task type + a short random-looking key (no file names / user info).
+# main.py finds (and cancels) this run again by that key.
+run-name: "${{ inputs.task_type }} | ${{ inputs.task_key }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_type:
+        description: 'compress | hardsub | addaudio | audioextract'
+        required: true
+      video_id:
+        description: 'Telegram Video Link'
+        required: true
+      extra_id:
+        description: 'Subtitle link (hardsub) / Audio link (addaudio)'
+        required: false
+        default: 'none'
+      rename:
+        description: 'Output File Name'
+        required: false
+        default: 'output.mp4'
+      chat_id:
+        description: 'Telegram Chat ID'
+        required: true
+      user_id:
+        description: 'User ID'
+        required: false
+        default: 'none'
+      resolution:
+        description: 'Resolution'
+        required: false
+        default: 'none'
+      font_link:
+        description: 'Font Link'
+        required: false
+        default: 'none'
+      trigger_msg_id:
+        description: 'Status Message ID'
+        required: false
+        default: 'none'
+      task_key:
+        description: 'Task key (duplicate check / cancel)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  encode_job:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    steps:
+      # Logs of a public repo are readable by everyone -> hide the private inputs first.
+      # (values are read from the event file, so they never appear in this step's own header)
+      - name: Hide private inputs in logs
+        run: |
+          for k in video_id extra_id rename chat_id user_id font_link; do
+            v=$(jq -r --arg k "$k" '.inputs[$k] // ""' "$GITHUB_EVENT_PATH")
+            case "$v" in
+              ""|none) ;;
+              *) echo "::add-mask::$v"; echo "::add-mask::${v#-}" ;;
+            esac
+          done
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      # pip and apt run at the same time -> shorter start-up.
+      # fonts-* : Arial-compatible + Devanagari/Noto fallbacks, so subtitles never turn into boxes.
+      - name: Install FFmpeg, fonts & Python deps
+        run: |
+          pip install -r requirements.txt &
+          PIP_PID=$!
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg fontconfig fonts-liberation fonts-dejavu-core fonts-noto-core
+          wait $PIP_PID
+
+      # studio.py reads the task inputs from the event file itself (not from env) -> nothing private in the log.
+      - name: Run Studio Processor
+        env:
+          PYTHONUNBUFFERED: '1'
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: python studio.py
+
+      # Runs when the task is cancelled (/stop on the bot) -> the status message shows "cancelled".
+      # (GitHub's runner is wiped after every run, so temp files need no manual cleanup.)
+      - name: Mark message as cancelled
+        if: cancelled()
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: |
+          CHAT=$(jq -r '.inputs.chat_id // ""' "$GITHUB_EVENT_PATH")
+          MSG=$(jq -r '.inputs.trigger_msg_id // ""' "$GITHUB_EVENT_PATH")
+          if [ -n "$MSG" ] && [ "$MSG" != "none" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+              --data-urlencode "chat_id=${CHAT}" \
+              --data-urlencode "message_id=${MSG}" \
+              --data-urlencode "text=ðŸ›‘ Task cancelled." \
+              --data-urlencode 'reply_markup={"inline_keyboard":[]}' > /dev/null
+          fi
